@@ -1,0 +1,23 @@
+{
+  "name": "@cursor-notebook-bridge/backend-colab",
+  "version": "0.1.0",
+  "description": "Google Colab backend adapter — MCP-first with session-based fallback",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "clean": "rimraf dist"
+  },
+  "dependencies": {
+    "@cursor-notebook-bridge/core": "workspace:*",
+    "@modelcontextprotocol/sdk": "^1.9.0",
+    "node-fetch": "^3.3.0",
+    "uuid": "^9.0.0"
+  },
+  "devDependencies": {
+    "@types/uuid": "^9.0.0",
+    "rimraf": "^5.0.0",
+    "typescript": "^5.4.0"
+  }
+}
