@@ -1,0 +1,119 @@
+{
+  "name": "cursor-notebook-bridge",
+  "displayName": "Cursor Notebook Bridge",
+  "description": "Run code on remote notebooks (Colab, Jupyter) directly from Cursor",
+  "version": "0.1.0",
+  "publisher": "cursor-notebook-bridge",
+  "license": "MIT",
+  "repository": "https://github.com/cursor-notebook-bridge/cursor-notebook-bridge",
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": ["Other", "Machine Learning", "Notebooks"],
+  "keywords": ["colab", "jupyter", "notebook", "remote execution"],
+  "activationEvents": ["onStartupFinished"],
+  "main": "./dist/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "notebookBridge.attachSession",
+        "title": "Notebook Bridge: Attach to Session",
+        "icon": "$(plug)"
+      },
+      {
+        "command": "notebookBridge.runSelection",
+        "title": "Notebook Bridge: Run Selection on Remote",
+        "icon": "$(play)"
+      },
+      {
+        "command": "notebookBridge.runFile",
+        "title": "Notebook Bridge: Run File on Remote",
+        "icon": "$(run-all)"
+      },
+      {
+        "command": "notebookBridge.pushNotebook",
+        "title": "Notebook Bridge: Push Notebook to Remote",
+        "icon": "$(cloud-upload)"
+      },
+      {
+        "command": "notebookBridge.pullNotebook",
+        "title": "Notebook Bridge: Pull Notebook from Remote",
+        "icon": "$(cloud-download)"
+      },
+      {
+        "command": "notebookBridge.showOutput",
+        "title": "Notebook Bridge: Show Output Panel"
+      },
+      {
+        "command": "notebookBridge.disconnect",
+        "title": "Notebook Bridge: Disconnect Session"
+      }
+    ],
+    "keybindings": [
+      {
+        "command": "notebookBridge.runSelection",
+        "key": "ctrl+shift+enter",
+        "mac": "cmd+shift+enter",
+        "when": "editorTextFocus && editorLangId == python || notebookEditorFocused"
+      }
+    ],
+    "menus": {
+      "editor/context": [
+        {
+          "command": "notebookBridge.runSelection",
+          "when": "editorHasSelection && editorLangId == python",
+          "group": "notebookBridge@1"
+        },
+        {
+          "command": "notebookBridge.runFile",
+          "when": "editorLangId == python",
+          "group": "notebookBridge@2"
+        }
+      ],
+      "notebook/cell/execute": [
+        {
+          "command": "notebookBridge.runSelection",
+          "group": "notebookBridge@1",
+          "when": "notebookEditorFocused"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "Notebook Bridge",
+      "properties": {
+        "notebookBridge.bridgePort": {
+          "type": "number",
+          "default": 52000,
+          "description": "Port used by the local bridge service."
+        },
+        "notebookBridge.defaultBackend": {
+          "type": "string",
+          "default": "colab",
+          "description": "Backend to use when creating new sessions. Supported: colab."
+        },
+        "notebookBridge.executionTimeoutMs": {
+          "type": "number",
+          "default": 120000,
+          "description": "Milliseconds to wait for a cell to finish executing before timing out."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "pnpm run build",
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "clean": "rimraf dist",
+    "package": "vsce package --no-dependencies"
+  },
+  "dependencies": {
+    "ws": "^8.17.0"
+  },
+  "devDependencies": {
+    "@types/vscode": "^1.85.0",
+    "@types/ws": "^8.5.0",
+    "@vscode/vsce": "^2.26.0",
+    "rimraf": "^5.0.0",
+    "typescript": "^5.4.0"
+  }
+}
