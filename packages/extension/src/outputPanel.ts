@@ -32,12 +32,15 @@ export class OutputPanel implements vscode.Disposable {
         break;
 
       case "display":
-        if (event["mimeType"] === "text/plain") {
-          this.channel.appendLine(`${cellId}${String(event["data"] ?? "")}`);
+        // Rich types (images, HTML, JSON, LaTeX) are rendered in the
+        // RichOutputPanel webview — only log a brief notice here so the
+        // text channel stays readable.
+        if (String(event["mimeType"]).startsWith("image/")) {
+          this.channel.appendLine(`${cellId}[image — shown in Notebook Output panel]`);
         } else if (event["mimeType"] === "text/html") {
-          this.channel.appendLine(`${cellId}[HTML output — open browser preview to view]`);
-        } else if (String(event["mimeType"]).startsWith("image/")) {
-          this.channel.appendLine(`${cellId}[Image output: ${event["mimeType"]}]`);
+          this.channel.appendLine(`${cellId}[HTML — shown in Notebook Output panel]`);
+        } else if (event["mimeType"] === "text/plain") {
+          this.channel.appendLine(`${cellId}${String(event["data"] ?? "")}`);
         } else {
           this.channel.appendLine(
             `${cellId}[${event["mimeType"]}] ${String(event["data"] ?? "").slice(0, 200)}`

@@ -12,6 +12,9 @@
  *   run_code_cell    cellId
  */
 
+import { homedir } from "os";
+import { readFileSync, writeFileSync, mkdirSync } from "fs";
+import { join } from "path";
 import { v4 as uuidv4 } from "uuid";
 import { ColabMcpClient } from "./mcpClient.js";
 import type {
@@ -34,6 +37,42 @@ import type {
   NotebookChangedEvent,
 } from "@cursor-notebook-bridge/core";
 
+// ---------------------------------------------------------------------------
+// Cell map persistence
+// Cell ID mappings (ourId → colabId) are persisted to disk so they survive
+// bridge restarts.  Keyed by notebookUri so different notebooks don't collide.
+// ---------------------------------------------------------------------------
+
+const STORE_DIR = join(homedir(), ".cursor-notebook-bridge");
+const STORE_FILE = join(STORE_DIR, "cellmap.json");
+
+type PersistedStore = Record<string, Record<string, string>>;
+
+function loadStore(): Map<string, Map<string, string>> {
+  try {
+    const raw = readFileSync(STORE_FILE, "utf-8");
+    const parsed = JSON.parse(raw) as PersistedStore;
+    return new Map(
+      Object.entries(parsed).map(([uri, map]) => [uri, new Map(Object.entries(map))])
+    );
+  } catch {
+    return new Map();
+  }
+}
+
+function saveStore(store: Map<string, Map<string, string>>): void {
+  try {
+    mkdirSync(STORE_DIR, { recursive: true });
+    const obj: PersistedStore = {};
+    for (const [uri, map] of store) {
+      obj[uri] = Object.fromEntries(map);
+    }
+    writeFileSync(STORE_FILE, JSON.stringify(obj, null, 2), "utf-8");
+  } catch (err) {
+    console.warn("[ColabBackend] Could not save cell map:", err);
+  }
+}
+
 export class ColabBackend implements NotebookBackend {
   readonly id = "colab";
   readonly displayName = "Google Colab";
@@ -48,11 +87,15 @@ export class ColabBackend implements NotebookBackend {
   private readonly mcp: ColabMcpClient;
   private readonly sessionMap = new Map<string, Session>();
   private proxyConnected = false;
-  /** Maps our internal cell IDs → Colab-assigned cell IDs */
+  /** Maps our internal cell IDs → Colab-assigned cell IDs (in-memory working copy) */
   private readonly cellIdMap = new Map<string, string>();
+  /** Persisted store: notebookUri → (ourCellId → colabCellId) */
+  private readonly persistedMaps: Map<string, Map<string, string>>;
 
   constructor(mcpClient?: ColabMcpClient) {
     this.mcp = mcpClient ?? new ColabMcpClient();
+    this.persistedMaps = loadStore();
+    console.log(`[ColabBackend] Loaded persisted cell maps for ${this.persistedMaps.size} notebook(s)`);
   }
 
   // ---------------------------------------------------------------------------
@@ -93,13 +136,32 @@ export class ColabBackend implements NotebookBackend {
     };
 
     this.sessionMap.set(sessionId, session);
+
+    // Restore any cell ID mappings saved from a previous session for this notebook
+    const saved = this.persistedMaps.get(notebookUri);
+    if (saved && saved.size > 0) {
+      for (const [ourId, colabId] of saved) {
+        this.cellIdMap.set(ourId, colabId);
+      }
+      console.log(`[ColabBackend] Restored ${saved.size} cell ID mapping(s) for ${notebookUri}`);
+    }
+
     return session;
   }
 
   async disconnect(sessionId: string): Promise<void> {
+    const notebookUri = this.sessionMap.get(sessionId)?.notebookUri;
     this.sessionMap.delete(sessionId);
     this.proxyConnected = false;
     this.cellIdMap.clear();
+
+    // Remove persisted mappings for this notebook on explicit disconnect so a
+    // fresh attach next time starts without stale Colab cell IDs.
+    if (notebookUri) {
+      this.persistedMaps.delete(notebookUri);
+      saveStore(this.persistedMaps);
+      console.log(`[ColabBackend] Cleared persisted cell map for ${notebookUri}`);
+    }
   }
 
   // ---------------------------------------------------------------------------
@@ -136,44 +198,80 @@ export class ColabBackend implements NotebookBackend {
   async pushCells(sessionId: string, cells: NotebookCell[], _options?: PushOptions): Promise<Session> {
     await this.mcp.connect();
     const session = this.sessionMap.get(sessionId);
+    const notebookUri = session?.notebookUri ?? sessionId;
 
-    for (let i = 0; i < cells.length; i++) {
-      const cell = cells[i]!;
+    // Separate cells into two buckets up front:
+    //   known   → already exist in Colab (use update_cell)
+    //   unknown → brand-new cells (use add_code_cell / add_text_cell)
+    const hasNewCells = cells.some((c) => !this.cellIdMap.has(c.id));
+
+    // Only pay the round-trip cost of fetching the cell count when we actually
+    // need to insert new cells.
+    let baseIndex = 0;
+    if (hasNewCells) {
       try {
-        if (cell.cellType === "markdown") {
-          await this.mcp.addTextCell({ cellIndex: i, content: cell.source });
-        } else {
-          const result = await this.mcp.addCodeCell({ cellIndex: i, language: "python", code: cell.source });
-          console.log(`[ColabBackend] add_code_cell result for ${cell.id}:`, JSON.stringify(result));
+        const existing = await this.mcp.getCells({});
+        baseIndex = existing.cells?.length ?? 0;
+        console.log(`[ColabBackend] Notebook has ${baseIndex} cell(s); new cells will be appended from index ${baseIndex}`);
+      } catch (err) {
+        console.warn("[ColabBackend] Could not fetch cell count before push; inserting at index 0:", err);
+      }
+    }
 
-          // Extract the Colab-assigned cell ID from the response
-          const colabCellId =
-            (result as Record<string, unknown>)["cellId"] as string | undefined ??
-            (result as Record<string, unknown>)["cell_id"] as string | undefined ??
-            (result as Record<string, unknown>)["id"] as string | undefined;
+    let newCellOffset = 0; // tracks how many new cells we've inserted so far
 
-          if (colabCellId) {
-            this.cellIdMap.set(cell.id, colabCellId);
-            console.log(`[ColabBackend] Mapped ${cell.id} → ${colabCellId}`);
+    for (const cell of cells) {
+      const existingColabId = this.cellIdMap.get(cell.id);
+
+      if (existingColabId) {
+        // ── Cell already exists in Colab → patch source in place ──────────
+        try {
+          await this.mcp.updateCell({ cellId: existingColabId, content: cell.source });
+          console.log(`[ColabBackend] update_cell ${cell.id} → ${existingColabId}`);
+        } catch (err) {
+          console.warn(`[ColabBackend] update_cell failed for ${cell.id} (colabId=${existingColabId}):`, err);
+        }
+      } else {
+        // ── New cell → append after all existing cells ─────────────────────
+        const insertIndex = baseIndex + newCellOffset;
+        try {
+          if (cell.cellType === "markdown") {
+            await this.mcp.addTextCell({ cellIndex: insertIndex, content: cell.source });
+            newCellOffset++;
           } else {
-            // Fallback: fetch the cell at that index to get its Colab ID
-            try {
-              const fetched = await this.mcp.getCells({ cellIndexStart: i, cellIndexEnd: i });
-              const fetchedId =
-                fetched.cells?.[0]?.id as string | undefined ??
-                fetched.cells?.[0]?.cellId as string | undefined ??
-                fetched.cells?.[0]?.cell_id as string | undefined;
-              if (fetchedId) {
-                this.cellIdMap.set(cell.id, fetchedId);
-                console.log(`[ColabBackend] Mapped (via get_cells) ${cell.id} → ${fetchedId}`);
+            const result = await this.mcp.addCodeCell({ cellIndex: insertIndex, language: "python", code: cell.source });
+            console.log(`[ColabBackend] add_code_cell result for ${cell.id}:`, JSON.stringify(result));
+            newCellOffset++;
+
+            // Extract the Colab-assigned cell ID so future edits use update_cell
+            const colabCellId =
+              (result as Record<string, unknown>)["cellId"] as string | undefined ??
+              (result as Record<string, unknown>)["cell_id"] as string | undefined ??
+              (result as Record<string, unknown>)["id"] as string | undefined;
+
+            if (colabCellId) {
+              this.persistMapping(notebookUri, cell.id, colabCellId);
+              console.log(`[ColabBackend] Mapped ${cell.id} → ${colabCellId}`);
+            } else {
+              // Fallback: fetch the cell at the insertion index to get its Colab ID
+              try {
+                const fetched = await this.mcp.getCells({ cellIndexStart: insertIndex, cellIndexEnd: insertIndex });
+                const fetchedId =
+                  fetched.cells?.[0]?.id as string | undefined ??
+                  fetched.cells?.[0]?.cellId as string | undefined ??
+                  fetched.cells?.[0]?.cell_id as string | undefined;
+                if (fetchedId) {
+                  this.persistMapping(notebookUri, cell.id, fetchedId);
+                  console.log(`[ColabBackend] Mapped (via get_cells) ${cell.id} → ${fetchedId}`);
+                }
+              } catch (fetchErr) {
+                console.warn(`[ColabBackend] Could not fetch Colab ID for cell ${cell.id}:`, fetchErr);
               }
-            } catch (fetchErr) {
-              console.warn(`[ColabBackend] Could not fetch Colab ID for cell ${cell.id}:`, fetchErr);
             }
           }
+        } catch (err) {
+          console.warn(`[ColabBackend] Failed to add cell ${cell.id}:`, err);
         }
-      } catch (err) {
-        console.warn(`[ColabBackend] Failed to push cell ${cell.id}:`, err);
       }
     }
 
@@ -258,6 +356,19 @@ export class ColabBackend implements NotebookBackend {
 
   private buildSession(sessionId: string, notebookUri: string): Session {
     return { id: sessionId, status: "attached", label: notebookUri, notebookUri, backendId: this.id };
+  }
+
+  /**
+   * Record a ourCellId → colabCellId mapping both in memory and on disk.
+   * Pass the notebookUri so the persisted store is partitioned correctly.
+   */
+  private persistMapping(notebookUri: string, ourCellId: string, colabCellId: string): void {
+    this.cellIdMap.set(ourCellId, colabCellId);
+    if (!this.persistedMaps.has(notebookUri)) {
+      this.persistedMaps.set(notebookUri, new Map());
+    }
+    this.persistedMaps.get(notebookUri)!.set(ourCellId, colabCellId);
+    saveStore(this.persistedMaps);
   }
 }
 

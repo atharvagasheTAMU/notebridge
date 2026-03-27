@@ -45,6 +45,16 @@
         "title": "Notebook Bridge: Show Output Panel"
       },
       {
+        "command": "notebookBridge.showRichOutput",
+        "title": "Notebook Bridge: Show Rich Output (Plots & HTML)",
+        "icon": "$(graph)"
+      },
+      {
+        "command": "notebookBridge.mountDrive",
+        "title": "Notebook Bridge: Mount Google Drive",
+        "icon": "$(database)"
+      },
+      {
         "command": "notebookBridge.disconnect",
         "title": "Notebook Bridge: Disconnect Session"
       }

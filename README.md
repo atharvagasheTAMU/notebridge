@@ -149,6 +149,7 @@ pnpm build
 - [x] Colab backend via official MCP server
 - [x] Cursor extension with run/push/pull commands
 - [x] Script-to-notebook sync engine (`# %%` separator support)
+- [x] Rich output webview — matplotlib plots, pandas DataFrames, HTML render inline in Cursor
 - [ ] Validate Colab MCP tool names against live server (see `docs/colab-spike.md`)
 - [ ] Streaming output support (upgrade `supportsStreamingOutput` once confirmed)
 - [ ] Kaggle backend adapter

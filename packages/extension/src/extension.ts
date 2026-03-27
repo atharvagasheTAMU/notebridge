@@ -13,10 +13,12 @@ import * as vscode from "vscode";
 import { BridgeClient } from "./bridgeClient.js";
 import { StatusBarItem } from "./statusBar.js";
 import { OutputPanel } from "./outputPanel.js";
+import { RichOutputPanel } from "./richOutputPanel.js";
 import { startBridgeProcess } from "./bridgeProcess.js";
 import { attachSession } from "./commands/attachSession.js";
 import { runSelection } from "./commands/runSelection.js";
 import { pullNotebook, pushNotebook } from "./commands/syncNotebook.js";
+import { mountGoogleDrive } from "./commands/mountDrive.js";
 import type { SessionInfo } from "./bridgeClient.js";
 
 let bridgeClient: BridgeClient | undefined;
@@ -29,8 +31,9 @@ export function activate(context: vscode.ExtensionContext): void {
 
   const statusBar = new StatusBarItem();
   const outputPanel = new OutputPanel();
+  const richOutputPanel = new RichOutputPanel(context);
 
-  context.subscriptions.push(statusBar, outputPanel);
+  context.subscriptions.push(statusBar, outputPanel, richOutputPanel);
 
   // Show "starting" state immediately so the user knows something is happening
   statusBar.update("connecting");
@@ -92,6 +95,16 @@ export function activate(context: vscode.ExtensionContext): void {
       outputPanel.show();
     }),
 
+    vscode.commands.registerCommand("notebookBridge.showRichOutput", () => {
+      richOutputPanel.show();
+    }),
+
+    vscode.commands.registerCommand("notebookBridge.mountDrive", () =>
+      requireBridge((client) =>
+        mountGoogleDrive(client, outputPanel, statusBar, activeSession)
+      )
+    ),
+
     vscode.commands.registerCommand("notebookBridge.disconnect", () =>
       requireBridge(async (client) => {
         if (!activeSession) {
@@ -119,14 +132,15 @@ export function activate(context: vscode.ExtensionContext): void {
   // Start bridge process in the background — does NOT block activation.
   // ---------------------------------------------------------------------------
 
-  startBridgeInBackground(context, port, statusBar, outputPanel);
+  startBridgeInBackground(context, port, statusBar, outputPanel, richOutputPanel);
 }
 
 function startBridgeInBackground(
   context: vscode.ExtensionContext,
   port: number,
   statusBar: StatusBarItem,
-  outputPanel: OutputPanel
+  outputPanel: OutputPanel,
+  richOutputPanel: RichOutputPanel
 ): void {
   startBridgeProcess(context, port)
     .then((info) => {
@@ -135,7 +149,12 @@ function startBridgeInBackground(
 
       context.subscriptions.push(
         bridgeClient.onEvent.event((event) => {
-          outputPanel.handleEvent(event);
+          // Route display events to the rich panel first; if handled, suppress
+          // the placeholder text the text channel would have emitted instead.
+          const handledByRich = richOutputPanel.handleEvent(event);
+          if (!handledByRich) {
+            outputPanel.handleEvent(event);
+          }
 
           if (event["kind"] === "session_changed") {
             const s = event["status"] as string;
@@ -149,7 +168,11 @@ function startBridgeInBackground(
 
           if (event["kind"] === "status") {
             const s = event["status"] as string;
-            if (s === "running") statusBar.update("running", activeSession?.label);
+            if (s === "running") {
+              // New execution starting — clear the rich output panel
+              richOutputPanel.clear();
+              statusBar.update("running", activeSession?.label);
+            }
             if (s === "idle") statusBar.update("attached", activeSession?.label);
             if (s === "error") statusBar.update("error", activeSession?.label);
           }
