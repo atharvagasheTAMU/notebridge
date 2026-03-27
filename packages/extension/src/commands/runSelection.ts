@@ -3,13 +3,17 @@ import type { BridgeClient, SessionInfo } from "../bridgeClient.js";
 import type { OutputPanel } from "../outputPanel.js";
 import type { StatusBarItem } from "../statusBar.js";
 
+type RunPayload = { cellType: "code"; source: string } | { cellType: "markdown"; source: string };
+
 /**
- * Run the active text selection (or current notebook cell) as a single code
- * cell on the remote session.
+ * Run the active text selection (or current notebook cell) on the remote session.
  *
- * Works in two contexts:
- *  1. A regular .py text editor — uses the text selection (or whole file).
- *  2. A .ipynb notebook editor — uses the focused cell's content.
+ * Code cells are pushed and executed on the kernel. Markdown cells are pushed as
+ * text cells on Colab (no kernel run — same idea as “Run cell” rendering markdown).
+ *
+ * Contexts:
+ *  1. `.py` editor — selection or whole file as code.
+ *  2. `.ipynb` — focused / selected cells (code and/or markdown).
  */
 export async function runSelection(
   client: BridgeClient,
@@ -28,10 +32,9 @@ export async function runSelection(
     return;
   }
 
-  // ── Resolve the code to execute ─────────────────────────────────────────
-  const source = getSourceToRun();
-  if (!source) {
-    vscode.window.showWarningMessage("Notebook Bridge: Nothing to run.");
+  const payload = getPayloadToRun();
+  if (!payload) {
+    notifyNothingToRun();
     return;
   }
 
@@ -44,18 +47,19 @@ export async function runSelection(
     await client.pushCells(session.id, [
       {
         id: tempCellId,
-        cellType: "code",
-        source,
+        cellType: payload.cellType,
+        source: payload.source,
         outputs: [],
         executionCount: null,
         metadata: { transient: true },
       },
     ]);
 
-    const config = vscode.workspace.getConfiguration("notebookBridge");
-    const timeoutMs: number = config.get("executionTimeoutMs") ?? 120_000;
-
-    await client.runCells(session.id, [tempCellId], { timeoutMs });
+    if (payload.cellType === "code") {
+      const config = vscode.workspace.getConfiguration("notebookBridge");
+      const timeoutMs: number = config.get("executionTimeoutMs") ?? 120_000;
+      await client.runCells(session.id, [tempCellId], { timeoutMs });
+    }
 
     statusBar.update("attached", session.label);
   } catch (err) {
@@ -70,53 +74,73 @@ export async function runSelection(
 // ---------------------------------------------------------------------------
 
 /**
- * Returns the code to run, checking notebook editor first, then text editor.
- * Returns undefined if nothing is found.
+ * Builds what to send to the remote: code (run on kernel) or markdown (text cell only).
  */
-function getSourceToRun(): string | undefined {
-  // ── Notebook editor (`.ipynb`) ──────────────────────────────────────────
+function getPayloadToRun(): RunPayload | undefined {
   const notebookEditor = vscode.window.activeNotebookEditor;
   if (notebookEditor) {
     const notebook = notebookEditor.notebook;
     const selections = notebookEditor.selections;
 
     if (selections.length > 0) {
-      // Collect code from all selected cell ranges
-      const parts: string[] = [];
+      const codeParts: string[] = [];
+      const mdParts: string[] = [];
       for (const range of selections) {
         for (let i = range.start; i < range.end; i++) {
           const cell = notebook.cellAt(i);
           if (cell.kind === vscode.NotebookCellKind.Code) {
-            parts.push(cell.document.getText());
+            codeParts.push(cell.document.getText());
+          } else if (cell.kind === vscode.NotebookCellKind.Markup) {
+            mdParts.push(cell.document.getText());
           }
         }
       }
-      if (parts.length > 0) return parts.join("\n\n");
+      if (codeParts.length > 0) {
+        const source = codeParts.map((s) => s.trim()).filter(Boolean).join("\n\n");
+        return source ? { cellType: "code", source } : undefined;
+      }
+      if (mdParts.length > 0) {
+        const source = mdParts.map((s) => s.trim()).filter(Boolean).join("\n\n");
+        return source ? { cellType: "markdown", source } : undefined;
+      }
     }
 
-    // No explicit selection — use the cell at the cursor (first selection start)
     const activeCellIndex = selections[0]?.start ?? 0;
     const activeCell = notebook.cellAt(activeCellIndex);
     if (activeCell?.kind === vscode.NotebookCellKind.Code) {
-      return activeCell.document.getText();
+      const text = activeCell.document.getText().trim();
+      return text ? { cellType: "code", source: text } : undefined;
     }
-
-    // Fallback: use every code cell
-    const allCode = Array.from({ length: notebook.cellCount }, (_, i) => notebook.cellAt(i))
-      .filter((c) => c.kind === vscode.NotebookCellKind.Code)
-      .map((c) => c.document.getText())
-      .join("\n\n");
-    return allCode.trim() || undefined;
+    if (activeCell?.kind === vscode.NotebookCellKind.Markup) {
+      const text = activeCell.document.getText().trim();
+      return text ? { cellType: "markdown", source: text } : undefined;
+    }
+    return undefined;
   }
 
-  // ── Text editor (`.py` or any other file) ──────────────────────────────
   const editor = vscode.window.activeTextEditor;
   if (editor) {
     const text = editor.selection.isEmpty
       ? editor.document.getText()
       : editor.document.getText(editor.selection);
-    return text.trim() || undefined;
+    const trimmed = text.trim();
+    return trimmed ? { cellType: "code", source: trimmed } : undefined;
   }
 
   return undefined;
+}
+
+function notifyNothingToRun(): void {
+  const nb = vscode.window.activeNotebookEditor;
+  if (nb) {
+    const idx = nb.selections[0]?.start ?? 0;
+    const cell = nb.notebook.cellAt(idx);
+    if (cell && cell.kind !== vscode.NotebookCellKind.Code && cell.kind !== vscode.NotebookCellKind.Markup) {
+      vscode.window.showInformationMessage(
+        "Notebook Bridge: Only code and markdown cells can be sent to the remote session."
+      );
+      return;
+    }
+  }
+  vscode.window.showWarningMessage("Notebook Bridge: Nothing to run.");
 }
