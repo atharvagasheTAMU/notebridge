@@ -105,6 +105,11 @@
           "type": "number",
           "default": 120000,
           "description": "Milliseconds to wait for a cell to finish executing before timing out."
+        },
+        "notebookBridge.colabMcpUvxSpec": {
+          "type": "string",
+          "default": "",
+          "description": "Optional uvx package spec for Google's colab-mcp (e.g. git+https://github.com/googlecolab/colab-mcp@main). Sets COLAB_MCP_SPEC for the bridge process. Leave empty for the built-in pinned release tag."
         }
       }
     }

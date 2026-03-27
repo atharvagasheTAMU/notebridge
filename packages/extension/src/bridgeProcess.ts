@@ -27,7 +27,12 @@ export async function startBridgeProcess(
     );
   }
 
-  const childEnv = buildChildEnv(port);
+  const colabSpec = vscode.workspace
+    .getConfiguration("notebookBridge")
+    .get<string>("colabMcpUvxSpec")
+    ?.trim();
+
+  const childEnv = buildChildEnv(port, colabSpec);
 
   return new Promise((resolve, reject) => {
     const child = cp.spawn(process.execPath, [serverScript], {
@@ -97,8 +102,12 @@ function resolveServerScript(context: vscode.ExtensionContext): string {
   return path.join(context.extensionPath, "bridge", "server.js");
 }
 
-function buildChildEnv(port: number): NodeJS.ProcessEnv {
+function buildChildEnv(port: number, colabMcpUvxSpec?: string): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = { ...process.env, BRIDGE_PORT: String(port) };
+
+  if (colabMcpUvxSpec) {
+    env["COLAB_MCP_SPEC"] = colabMcpUvxSpec;
+  }
 
   // Extend PATH with known git locations that exist on this machine.
   // We avoid shell invocations here to prevent hangs during activation.

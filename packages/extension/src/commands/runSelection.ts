@@ -2,6 +2,14 @@ import * as vscode from "vscode";
 import type { BridgeClient, SessionInfo } from "../bridgeClient.js";
 import type { OutputPanel } from "../outputPanel.js";
 import type { StatusBarItem } from "../statusBar.js";
+import {
+  armNotebookInlineOutput,
+  getInlineOutputAnchorCellIndex,
+} from "../notebookInlineOutput.js";
+import {
+  getMarkdownAnchorCellIndex,
+  syncLocalMarkdownFromLastRemoteCell,
+} from "../notebookMarkdownSync.js";
 
 type RunPayload = { cellType: "code"; source: string } | { cellType: "markdown"; source: string };
 
@@ -9,7 +17,8 @@ type RunPayload = { cellType: "code"; source: string } | { cellType: "markdown";
  * Run the active text selection (or current notebook cell) on the remote session.
  *
  * Code cells are pushed and executed on the kernel. Markdown cells are pushed as
- * text cells on Colab (no kernel run — same idea as “Run cell” rendering markdown).
+ * text cells on Colab (no kernel run), then the local markdown cell is refreshed
+ * from the remote source so it matches Colab’s canonical text.
  *
  * Contexts:
  *  1. `.py` editor — selection or whole file as code.
@@ -44,6 +53,21 @@ export async function runSelection(
 
   try {
     const tempCellId = `run-sel-${Date.now()}`;
+    const nbEditor = vscode.window.activeNotebookEditor;
+    const markdownSync =
+      payload.cellType === "markdown" && nbEditor
+        ? { uri: nbEditor.notebook.uri, cellIndex: getMarkdownAnchorCellIndex(nbEditor) }
+        : undefined;
+
+    if (nbEditor && payload.cellType === "code") {
+      armNotebookInlineOutput({
+        sessionId: session.id,
+        bridgeCellId: tempCellId,
+        uri: nbEditor.notebook.uri,
+        cellIndex: getInlineOutputAnchorCellIndex(nbEditor),
+      });
+    }
+
     await client.pushCells(session.id, [
       {
         id: tempCellId,
@@ -54,6 +78,19 @@ export async function runSelection(
         metadata: { transient: true },
       },
     ]);
+
+    if (markdownSync) {
+      try {
+        const remoteNb = await client.pullNotebook(session.id);
+        await syncLocalMarkdownFromLastRemoteCell(
+          markdownSync.uri,
+          markdownSync.cellIndex,
+          remoteNb
+        );
+      } catch (syncErr) {
+        console.warn("[Notebook Bridge] Could not sync local markdown from Colab:", syncErr);
+      }
+    }
 
     if (payload.cellType === "code") {
       const config = vscode.workspace.getConfiguration("notebookBridge");

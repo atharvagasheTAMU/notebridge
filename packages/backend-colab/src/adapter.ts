@@ -376,6 +376,19 @@ export class ColabBackend implements NotebookBackend {
 // Output event helpers
 // ---------------------------------------------------------------------------
 
+/**
+ * Jupyter / nbformat stream and display payloads often use `text` as string[].
+ * Using String(array) calls Array#toString(), which joins with commas — so
+ * multi-chunk stdout becomes `"line1\\n,line2"` instead of `"line1\\nline2"`.
+ */
+function jupyterTextToString(value: unknown): string {
+  if (value === undefined || value === null) return "";
+  if (Array.isArray(value)) {
+    return value.map((part) => (typeof part === "string" ? part : String(part))).join("");
+  }
+  return String(value);
+}
+
 function* emitOutputEvents(
   sessionId: string,
   cellId: string,
@@ -385,17 +398,26 @@ function* emitOutputEvents(
     const outputType = String(output["outputType"] ?? output["output_type"] ?? "stream");
 
     if (output["text"] !== undefined) {
-      yield makeEvent<StreamEvent>({ sessionId, cellId, kind: "stream", stream: "stdout", text: String(output["text"]) });
+      const stream = output["name"] === "stderr" ? "stderr" : "stdout";
+      yield makeEvent<StreamEvent>({
+        sessionId,
+        cellId,
+        kind: "stream",
+        stream,
+        text: jupyterTextToString(output["text"]),
+      });
     } else if (outputType === "error") {
       yield makeEvent<ErrorEvent>({
         sessionId, cellId, kind: "error",
         ename: String(output["ename"] ?? "Error"),
-        evalue: String(output["evalue"] ?? ""),
+        evalue: jupyterTextToString(output["evalue"]),
         traceback: (output["traceback"] as string[] | undefined) ?? [],
       });
     } else if (output["data"]) {
       for (const [mimeType, data] of Object.entries(output["data"] as Record<string, unknown>)) {
-        yield makeEvent<DisplayEvent>({ sessionId, cellId, kind: "display", mimeType, data: String(data) });
+        yield makeEvent<DisplayEvent>({
+          sessionId, cellId, kind: "display", mimeType, data: jupyterTextToString(data),
+        });
       }
     }
   }

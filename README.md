@@ -59,6 +59,8 @@ takes effect, then press **F5** to launch the Extension Development Host.
 | uv | `pip install uv` |
 | Google Chrome with Colab tab open | Auth uses your existing Google session |
 
+**Colab MCP package spec:** By default the bridge runs `uvx` with a **pinned** `git+https://github.com/googlecolab/colab-mcp@v1.0.0` so uv caches one environment instead of updating Git `HEAD` on every session. To use another ref, set environment variable **`COLAB_MCP_SPEC`** on the machine running the bridge, or in Cursor Settings set **`notebookBridge.colabMcpUvxSpec`** (same value passed through as `COLAB_MCP_SPEC`).
+
 ```bash
 # Clone and build
 git clone https://github.com/cursor-notebook-bridge/cursor-notebook-bridge

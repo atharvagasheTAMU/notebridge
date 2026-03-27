@@ -19,6 +19,7 @@ import { attachSession } from "./commands/attachSession.js";
 import { runSelection } from "./commands/runSelection.js";
 import { pullNotebook, pushNotebook } from "./commands/syncNotebook.js";
 import { mountGoogleDrive } from "./commands/mountDrive.js";
+import { handleNotebookBridgeEventForInlineOutput } from "./notebookInlineOutput.js";
 import type { SessionInfo } from "./bridgeClient.js";
 
 let bridgeClient: BridgeClient | undefined;
@@ -149,6 +150,8 @@ function startBridgeInBackground(
 
       context.subscriptions.push(
         bridgeClient.onEvent.event((event) => {
+          handleNotebookBridgeEventForInlineOutput(event);
+
           // Route display events to the rich panel first; if handled, suppress
           // the placeholder text the text channel would have emitted instead.
           const handledByRich = richOutputPanel.handleEvent(event);

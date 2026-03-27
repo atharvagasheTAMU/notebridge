@@ -123,7 +123,7 @@ This is the only Colab-specific code in the entire project. If Colab changes the
 
 ### `mcpClient.ts`
 
-The Colab MCP server (released by Google on March 17, 2026) is a command-line tool you run via `uvx git+https://github.com/googlecolab/colab-mcp`. It speaks the [Model Context Protocol](https://modelcontextprotocol.io/) over stdio — the same protocol Cursor uses internally.
+The Colab MCP server (released by Google on March 17, 2026) is a command-line tool the bridge starts with `uvx` using a pinned git tag on `googlecolab/colab-mcp` so installs are cached. Override with environment variable `COLAB_MCP_SPEC` or VS Code setting `notebookBridge.colabMcpUvxSpec` if you need `main` or another ref. It speaks the [Model Context Protocol](https://modelcontextprotocol.io/) over stdio — the same protocol Cursor uses internally.
 
 This file spawns that process and wraps each of its tools as a typed method:
 

@@ -62,7 +62,7 @@ All other packages depend on this. It defines:
 
 ### `@cursor-notebook-bridge/backend-colab`
 
-- `ColabMcpClient` — spawns `uvx git+https://github.com/googlecolab/colab-mcp`
+- `ColabMcpClient` — spawns `uvx` with a pinned `git+https://github.com/googlecolab/colab-mcp@v1.0.0` spec by default so uv reuses a cached environment; override with env `COLAB_MCP_SPEC` or setting `notebookBridge.colabMcpUvxSpec`
   and wraps each Colab MCP tool as a typed method
 - `ColabBackend` — implements `NotebookBackend` using `ColabMcpClient`
 

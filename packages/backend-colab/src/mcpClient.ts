@@ -1,6 +1,12 @@
 /**
  * ColabMcpClient — wrapper around googlecolab/colab-mcp.
  *
+ * Google ships this server for uvx from GitHub; the unrelated PyPI package named
+ * "colab-mcp" is a different project. We default to a pinned git tag so uv caches
+ * one environment instead of refreshing moving HEAD every launch.
+ *
+ * Override order: process.env.COLAB_MCP_SPEC, then built-in default below.
+ *
  * Tool schemas verified from live server output on 2026-03-23.
  * The server exposes ONE tool initially: open_colab_browser_connection.
  * After that call succeeds, 7 more tools become available:
@@ -13,6 +19,15 @@ import { existsSync } from "fs";
 import * as path from "path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
+
+/** Pinned release tag; bump after testing newer colab-mcp releases. */
+const DEFAULT_COLAB_MCP_UVX_SPEC = "git+https://github.com/googlecolab/colab-mcp@v1.0.0";
+
+function resolveColabMcpUvxSpec(): string {
+  const fromEnv = process.env["COLAB_MCP_SPEC"]?.trim();
+  if (fromEnv) return fromEnv;
+  return DEFAULT_COLAB_MCP_UVX_SPEC;
+}
 
 // ---------------------------------------------------------------------------
 // Verified arg / result types (from live schema logs)
@@ -108,9 +123,12 @@ export class ColabMcpClient {
   async connect(): Promise<void> {
     if (this.client) return;
 
+    const uvxSpec = resolveColabMcpUvxSpec();
+    console.log(`[ColabMcpClient] uvx package spec: ${uvxSpec}`);
+
     this.transport = new StdioClientTransport({
       command: "uvx",
-      args: ["git+https://github.com/googlecolab/colab-mcp"],
+      args: [uvxSpec],
       env: buildEnvWithTools(),
     });
 
